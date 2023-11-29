@@ -23,6 +23,7 @@ import 'package:flutter_tools/src/cache.dart';
 import 'package:flutter_tools/src/project.dart';
 import 'package:flutter_tools/src/reporting/reporting.dart';
 import 'package:test/fake.dart';
+import 'package:unified_analytics/unified_analytics.dart';
 
 import '../../src/common.dart';
 import '../../src/context.dart';
@@ -33,6 +34,7 @@ void main() {
   group('gradle build', () {
     late BufferLogger logger;
     late TestUsage testUsage;
+    late FakeAnalytics fakeAnalytics;
     late FileSystem fileSystem;
     late FakeProcessManager processManager;
 
@@ -42,6 +44,11 @@ void main() {
       testUsage = TestUsage();
       fileSystem = MemoryFileSystem.test();
       Cache.flutterRoot = '';
+
+      fakeAnalytics = getInitializedFakeAnalyticsInstance(
+        fs: fileSystem,
+        fakeFlutterVersion: FakeFlutterVersion(),
+      );
     });
 
     testUsingContext('Can immediately tool exit on recognized exit code/stderr', () async {
@@ -52,6 +59,7 @@ void main() {
         fileSystem: fileSystem,
         artifacts: Artifacts.test(),
         usage: testUsage,
+        analytics: fakeAnalytics,
         gradleUtils: FakeGradleUtils(),
         platform: FakePlatform(),
         androidStudio: FakeAndroidStudio(),
@@ -133,6 +141,15 @@ void main() {
           parameters: CustomDimensions(),
         ),
       ));
+      expect(testUsage.events, hasLength(2));
+
+      expect(
+        fakeAnalytics.sentEvents,
+        unorderedEquals(<Event>[
+          Event.flutterBuildInfo(label: 'app-not-using-android-x', buildType: 'gradle'),
+          Event.flutterBuildInfo(label: 'gradle-random-event-label-failure', buildType: 'gradle'),
+        ]),
+      );
     }, overrides: <Type, Generator>{
       AndroidStudio: () => FakeAndroidStudio(),
     });
@@ -145,6 +162,7 @@ void main() {
         fileSystem: fileSystem,
         artifacts: Artifacts.test(),
         usage: testUsage,
+        analytics: fakeAnalytics,
         gradleUtils: FakeGradleUtils(),
         platform: FakePlatform(),
         androidStudio: FakeAndroidStudio(),
@@ -213,6 +231,7 @@ void main() {
         fileSystem: fileSystem,
         artifacts: Artifacts.test(),
         usage: testUsage,
+        analytics: fakeAnalytics,
         gradleUtils: FakeGradleUtils(),
         platform: FakePlatform(),
         androidStudio: FakeAndroidStudio(),
@@ -307,6 +326,15 @@ void main() {
           parameters: CustomDimensions(),
         ),
       ));
+      expect(testUsage.events, hasLength(4));
+
+      expect(fakeAnalytics.sentEvents, hasLength(4));
+      expect(fakeAnalytics.sentEvents, contains(
+        Event.flutterBuildInfo(
+          label: 'gradle-random-event-label-failure',
+          buildType: 'gradle',
+        ),
+      ));
     }, overrides: <Type, Generator>{
       AndroidStudio: () => FakeAndroidStudio(),
     });
@@ -319,6 +347,7 @@ void main() {
         fileSystem: fileSystem,
         artifacts: Artifacts.test(),
         usage: testUsage,
+        analytics: fakeAnalytics,
         gradleUtils: FakeGradleUtils(),
         platform: FakePlatform(),
         androidStudio: FakeAndroidStudio(),
@@ -400,6 +429,16 @@ void main() {
           parameters: CustomDimensions(),
         ),
       ));
+      expect(testUsage.events, hasLength(2));
+
+      expect(fakeAnalytics.sentEvents, hasLength(2));
+      expect(fakeAnalytics.sentEvents, contains(
+        Event.flutterBuildInfo(
+          label: 'gradle-random-event-label-failure',
+          buildType: 'gradle',
+        ),
+      ));
+
     }, overrides: <Type, Generator>{
       AndroidStudio: () => FakeAndroidStudio(),
     });
@@ -412,6 +451,7 @@ void main() {
         fileSystem: fileSystem,
         artifacts: Artifacts.test(),
         usage: testUsage,
+        analytics: fakeAnalytics,
         gradleUtils: FakeGradleUtils(),
         platform: FakePlatform(),
         androidStudio: FakeAndroidStudio(),
@@ -477,6 +517,7 @@ void main() {
         fileSystem: fileSystem,
         artifacts: Artifacts.test(),
         usage: testUsage,
+        analytics: fakeAnalytics,
         gradleUtils: FakeGradleUtils(),
         platform: FakePlatform(),
         androidStudio: FakeAndroidStudio(),
@@ -581,6 +622,7 @@ void main() {
         fileSystem: fileSystem,
         artifacts: Artifacts.test(),
         usage: testUsage,
+        analytics: fakeAnalytics,
         gradleUtils: FakeGradleUtils(),
         platform: FakePlatform(
           environment: <String, String>{
@@ -683,6 +725,7 @@ void main() {
         fileSystem: fileSystem,
         artifacts: Artifacts.test(),
         usage: testUsage,
+        analytics: fakeAnalytics,
         gradleUtils: FakeGradleUtils(),
         platform: FakePlatform(),
         androidStudio: FakeAndroidStudio(),
@@ -811,6 +854,7 @@ android {
         fileSystem: fileSystem,
         artifacts: Artifacts.test(),
         usage: testUsage,
+        analytics: fakeAnalytics,
         gradleUtils: FakeGradleUtils(),
         platform: FakePlatform(),
         androidStudio: FakeAndroidStudio(),
@@ -846,6 +890,7 @@ BuildVariant: paidProfile
         fileSystem: fileSystem,
         artifacts: Artifacts.test(),
         usage: testUsage,
+        analytics: fakeAnalytics,
         gradleUtils: FakeGradleUtils(),
         platform: FakePlatform(),
         androidStudio: FakeAndroidStudio(),
@@ -869,7 +914,9 @@ Gradle Crashed
       AndroidStudio: () => FakeAndroidStudio(),
     });
 
-    testUsingContext('can call custom gradle task getApplicationIdForVariant and parse the result', () async {
+    testUsingContext('can call custom gradle task outputFreeDebugAppLinkSettings and parse the result', () async {
+      final String expectedOutputPath;
+      expectedOutputPath = fileSystem.path.join('/build/deeplink_data', 'app-link-settings-freeDebug.json');
       final AndroidGradleBuilder builder = AndroidGradleBuilder(
         java: FakeJava(),
         logger: logger,
@@ -877,123 +924,27 @@ Gradle Crashed
         fileSystem: fileSystem,
         artifacts: Artifacts.test(),
         usage: testUsage,
+        analytics: fakeAnalytics,
         gradleUtils: FakeGradleUtils(),
         platform: FakePlatform(),
         androidStudio: FakeAndroidStudio(),
       );
-      processManager.addCommand(const FakeCommand(
+      processManager.addCommand(FakeCommand(
         command: <String>[
           'gradlew',
           '-q',
-          'printFreeDebugApplicationId',
+          '-PoutputPath=$expectedOutputPath',
+          'outputFreeDebugAppLinkSettings',
         ],
-        stdout: '''
-ApplicationId: com.example.id
-        ''',
       ));
-      final String actual = await builder.getApplicationIdForVariant(
+      await builder.outputsAppLinkSettings(
         'freeDebug',
         project: FlutterProject.fromDirectoryTest(fileSystem.currentDirectory),
       );
-      expect(actual, 'com.example.id');
     }, overrides: <Type, Generator>{
       AndroidStudio: () => FakeAndroidStudio(),
-    });
-
-    testUsingContext('can call custom gradle task getApplicationIdForVariant with unknown crash', () async {
-      final AndroidGradleBuilder builder = AndroidGradleBuilder(
-        java: FakeJava(),
-        logger: logger,
-        processManager: processManager,
-        fileSystem: fileSystem,
-        artifacts: Artifacts.test(),
-        usage: testUsage,
-        gradleUtils: FakeGradleUtils(),
-        platform: FakePlatform(),
-        androidStudio: FakeAndroidStudio(),
-      );
-      processManager.addCommand(const FakeCommand(
-        command: <String>[
-          'gradlew',
-          '-q',
-          'printFreeDebugApplicationId',
-        ],
-        stdout: '''
-unknown crash
-        ''',
-      ));
-      final String actual = await builder.getApplicationIdForVariant(
-        'freeDebug',
-        project: FlutterProject.fromDirectoryTest(fileSystem.currentDirectory),
-      );
-      expect(actual, '');
-    }, overrides: <Type, Generator>{
-      AndroidStudio: () => FakeAndroidStudio(),
-    });
-
-    testUsingContext('can call custom gradle task getAppLinkDomainsForVariant and parse the result', () async {
-      final AndroidGradleBuilder builder = AndroidGradleBuilder(
-        java: FakeJava(),
-        logger: logger,
-        processManager: processManager,
-        fileSystem: fileSystem,
-        artifacts: Artifacts.test(),
-        usage: testUsage,
-        gradleUtils: FakeGradleUtils(),
-        platform: FakePlatform(),
-        androidStudio: FakeAndroidStudio(),
-      );
-
-      processManager.addCommand(const FakeCommand(
-        command: <String>[
-          'gradlew',
-          '-q',
-          'printFreeDebugAppLinkDomains',
-        ],
-        stdout: '''
-Domain: example.com
-Domain: example2.com
-        ''',
-      ));
-      final List<String> actual = await builder.getAppLinkDomainsForVariant(
-        'freeDebug',
-        project: FlutterProject.fromDirectoryTest(fileSystem.currentDirectory),
-      );
-      expect(actual, <String>['example.com', 'example2.com']);
-    }, overrides: <Type, Generator>{
-      AndroidStudio: () => FakeAndroidStudio(),
-    });
-
-    testUsingContext('can call custom gradle task getAppLinkDomainsForVariant with unknown crash', () async {
-      final AndroidGradleBuilder builder = AndroidGradleBuilder(
-        java: FakeJava(),
-        logger: logger,
-        processManager: processManager,
-        fileSystem: fileSystem,
-        artifacts: Artifacts.test(),
-        usage: testUsage,
-        gradleUtils: FakeGradleUtils(),
-        platform: FakePlatform(),
-        androidStudio: FakeAndroidStudio(),
-      );
-
-      processManager.addCommand(const FakeCommand(
-        command: <String>[
-          'gradlew',
-          '-q',
-          'printFreeDebugAppLinkDomains',
-        ],
-        stdout: '''
-unknown crash
-        ''',
-      ));
-      final List<String> actual = await builder.getAppLinkDomainsForVariant(
-        'freeDebug',
-        project: FlutterProject.fromDirectoryTest(fileSystem.currentDirectory),
-      );
-      expect(actual.isEmpty, isTrue);
-    }, overrides: <Type, Generator>{
-      AndroidStudio: () => FakeAndroidStudio(),
+      FileSystem: () => fileSystem,
+      ProcessManager: () => processManager,
     });
 
     testUsingContext("doesn't indicate how to consume an AAR when printHowToConsumeAar is false", () async {
@@ -1004,6 +955,7 @@ unknown crash
         fileSystem: fileSystem,
         artifacts: Artifacts.test(),
         usage: testUsage,
+        analytics: fakeAnalytics,
         gradleUtils: FakeGradleUtils(),
         platform: FakePlatform(),
         androidStudio: FakeAndroidStudio(),
@@ -1070,6 +1022,7 @@ unknown crash
         fileSystem: fileSystem,
         artifacts: Artifacts.test(),
         usage: testUsage,
+        analytics: fakeAnalytics,
         gradleUtils: FakeGradleUtils(),
         platform: FakePlatform(),
         androidStudio: FakeAndroidStudio(),
@@ -1129,6 +1082,7 @@ unknown crash
         fileSystem: fileSystem,
         artifacts: Artifacts.test(),
         usage: testUsage,
+        analytics: fakeAnalytics,
         gradleUtils: FakeGradleUtils(),
         platform: FakePlatform(),
         androidStudio: FakeAndroidStudio(),
@@ -1187,8 +1141,9 @@ unknown crash
         logger: logger,
         processManager: processManager,
         fileSystem: fileSystem,
-        artifacts: Artifacts.test(localEngine: 'out/android_arm'),
+        artifacts: Artifacts.testLocalEngine(localEngine: 'out/android_arm', localEngineHost: 'out/host_release'),
         usage: testUsage,
+        analytics: fakeAnalytics,
         gradleUtils: FakeGradleUtils(),
         platform: FakePlatform(),
         androidStudio: FakeAndroidStudio(),
@@ -1200,6 +1155,7 @@ unknown crash
           '-Plocal-engine-repo=/.tmp_rand0/flutter_tool_local_engine_repo.rand0',
           '-Plocal-engine-build-mode=release',
           '-Plocal-engine-out=out/android_arm',
+          '-Plocal-engine-host-out=out/host_release',
           '-Ptarget-platform=android-arm',
           '-Ptarget=lib/main.dart',
           '-Pbase-application-name=io.flutter.app.FlutterApplication',
@@ -1266,8 +1222,9 @@ unknown crash
         logger: logger,
         processManager: processManager,
         fileSystem: fileSystem,
-        artifacts: Artifacts.test(localEngine: 'out/android_arm64'),
+        artifacts: Artifacts.testLocalEngine(localEngine: 'out/android_arm64', localEngineHost: 'out/host_release'),
         usage: testUsage,
+        analytics: fakeAnalytics,
         gradleUtils: FakeGradleUtils(),
         platform: FakePlatform(),
         androidStudio: FakeAndroidStudio(),
@@ -1279,6 +1236,7 @@ unknown crash
           '-Plocal-engine-repo=/.tmp_rand0/flutter_tool_local_engine_repo.rand0',
           '-Plocal-engine-build-mode=release',
           '-Plocal-engine-out=out/android_arm64',
+          '-Plocal-engine-host-out=out/host_release',
           '-Ptarget-platform=android-arm64',
           '-Ptarget=lib/main.dart',
           '-Pbase-application-name=io.flutter.app.FlutterApplication',
@@ -1345,8 +1303,9 @@ unknown crash
         logger: logger,
         processManager: processManager,
         fileSystem: fileSystem,
-        artifacts: Artifacts.test(localEngine: 'out/android_x86'),
+        artifacts: Artifacts.testLocalEngine(localEngine: 'out/android_x86', localEngineHost: 'out/host_release'),
         usage: testUsage,
+        analytics: fakeAnalytics,
         gradleUtils: FakeGradleUtils(),
         platform: FakePlatform(),
         androidStudio: FakeAndroidStudio(),
@@ -1358,6 +1317,7 @@ unknown crash
           '-Plocal-engine-repo=/.tmp_rand0/flutter_tool_local_engine_repo.rand0',
           '-Plocal-engine-build-mode=release',
           '-Plocal-engine-out=out/android_x86',
+          '-Plocal-engine-host-out=out/host_release',
           '-Ptarget-platform=android-x86',
           '-Ptarget=lib/main.dart',
           '-Pbase-application-name=io.flutter.app.FlutterApplication',
@@ -1424,8 +1384,9 @@ unknown crash
         logger: logger,
         processManager: processManager,
         fileSystem: fileSystem,
-        artifacts: Artifacts.test(localEngine: 'out/android_x64'),
+        artifacts: Artifacts.testLocalEngine(localEngine: 'out/android_x64', localEngineHost: 'out/host_release'),
         usage: testUsage,
+        analytics: fakeAnalytics,
         gradleUtils: FakeGradleUtils(),
         platform: FakePlatform(),
         androidStudio: FakeAndroidStudio(),
@@ -1437,6 +1398,7 @@ unknown crash
           '-Plocal-engine-repo=/.tmp_rand0/flutter_tool_local_engine_repo.rand0',
           '-Plocal-engine-build-mode=release',
           '-Plocal-engine-out=out/android_x64',
+          '-Plocal-engine-host-out=out/host_release',
           '-Ptarget-platform=android-x64',
           '-Ptarget=lib/main.dart',
           '-Pbase-application-name=io.flutter.app.FlutterApplication',
@@ -1506,6 +1468,7 @@ unknown crash
         fileSystem: fileSystem,
         artifacts: Artifacts.test(),
         usage: testUsage,
+        analytics: fakeAnalytics,
         gradleUtils: FakeGradleUtils(),
         platform: FakePlatform(),
         androidStudio: FakeAndroidStudio(),
@@ -1565,8 +1528,9 @@ unknown crash
         logger: logger,
         processManager: processManager,
         fileSystem: fileSystem,
-        artifacts: Artifacts.test(localEngine: 'out/android_arm'),
+        artifacts: Artifacts.testLocalEngine(localEngine: 'out/android_arm', localEngineHost: 'out/host_release'),
         usage: testUsage,
+        analytics: fakeAnalytics,
         gradleUtils: FakeGradleUtils(),
         platform: FakePlatform(),
         androidStudio: FakeAndroidStudio(),
@@ -1586,6 +1550,7 @@ unknown crash
           '-Plocal-engine-repo=/.tmp_rand0/flutter_tool_local_engine_repo.rand0',
           '-Plocal-engine-build-mode=release',
           '-Plocal-engine-out=out/android_arm',
+          '-Plocal-engine-host-out=out/host_release',
           '-Ptarget-platform=android-arm',
           'assembleAarRelease',
         ],
@@ -1653,8 +1618,9 @@ unknown crash
         logger: logger,
         processManager: processManager,
         fileSystem: fileSystem,
-        artifacts: Artifacts.test(localEngine: 'out/android_arm64'),
+        artifacts: Artifacts.testLocalEngine(localEngine: 'out/android_arm64', localEngineHost: 'out/host_release'),
         usage: testUsage,
+        analytics: fakeAnalytics,
         gradleUtils: FakeGradleUtils(),
         platform: FakePlatform(),
         androidStudio: FakeAndroidStudio(),
@@ -1674,6 +1640,7 @@ unknown crash
           '-Plocal-engine-repo=/.tmp_rand0/flutter_tool_local_engine_repo.rand0',
           '-Plocal-engine-build-mode=release',
           '-Plocal-engine-out=out/android_arm64',
+          '-Plocal-engine-host-out=out/host_release',
           '-Ptarget-platform=android-arm64',
           'assembleAarRelease',
         ],
@@ -1741,8 +1708,9 @@ unknown crash
         logger: logger,
         processManager: processManager,
         fileSystem: fileSystem,
-        artifacts: Artifacts.test(localEngine: 'out/android_x86'),
+        artifacts: Artifacts.testLocalEngine(localEngine: 'out/android_x86', localEngineHost: 'out/host_release'),
         usage: testUsage,
+        analytics: fakeAnalytics,
         gradleUtils: FakeGradleUtils(),
         platform: FakePlatform(),
         androidStudio: FakeAndroidStudio(),
@@ -1762,6 +1730,7 @@ unknown crash
           '-Plocal-engine-repo=/.tmp_rand0/flutter_tool_local_engine_repo.rand0',
           '-Plocal-engine-build-mode=release',
           '-Plocal-engine-out=out/android_x86',
+          '-Plocal-engine-host-out=out/host_release',
           '-Ptarget-platform=android-x86',
           'assembleAarRelease',
         ],
@@ -1829,8 +1798,9 @@ unknown crash
         logger: logger,
         processManager: processManager,
         fileSystem: fileSystem,
-        artifacts: Artifacts.test(localEngine: 'out/android_x64'),
+        artifacts: Artifacts.testLocalEngine(localEngine: 'out/android_x64', localEngineHost: 'out/host_release'),
         usage: testUsage,
+        analytics: fakeAnalytics,
         gradleUtils: FakeGradleUtils(),
         platform: FakePlatform(),
         androidStudio: FakeAndroidStudio(),
@@ -1850,6 +1820,7 @@ unknown crash
           '-Plocal-engine-repo=/.tmp_rand0/flutter_tool_local_engine_repo.rand0',
           '-Plocal-engine-build-mode=release',
           '-Plocal-engine-out=out/android_x64',
+          '-Plocal-engine-host-out=out/host_release',
           '-Ptarget-platform=android-x64',
           'assembleAarRelease',
         ],

@@ -67,8 +67,6 @@ import 'theme_data.dart';
 ///  * <https://m3.material.io/components/buttons>
 class OutlinedButton extends ButtonStyleButton {
   /// Create an OutlinedButton.
-  ///
-  /// The [autofocus] and [clipBehavior] arguments must not be null.
   const OutlinedButton({
     super.key,
     required super.onPressed,
@@ -88,8 +86,6 @@ class OutlinedButton extends ButtonStyleButton {
   ///
   /// The icon and label are arranged in a row and padded by 12 logical pixels
   /// at the start, and 16 at the end, with an 8 pixel gap in between.
-  ///
-  /// The [icon] and [label] arguments must not be null.
   factory OutlinedButton.icon({
     Key? key,
     required VoidCallback? onPressed,
@@ -548,6 +544,9 @@ class _OutlinedButtonDefaultsM3 extends ButtonStyle {
     MaterialStateProperty.resolveWith((Set<MaterialState> states) {
     if (states.contains(MaterialState.disabled)) {
       return BorderSide(color: _colors.onSurface.withOpacity(0.12));
+    }
+    if (states.contains(MaterialState.focused)) {
+      return BorderSide(color: _colors.primary);
     }
     return BorderSide(color: _colors.outline);
   });

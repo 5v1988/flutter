@@ -9,6 +9,7 @@ import 'package:flutter/foundation.dart';
 import 'binding.dart';
 import 'debug.dart';
 import 'raw_keyboard.dart';
+import 'raw_keyboard_android.dart';
 import 'system_channels.dart';
 
 export 'dart:ui' show KeyData;
@@ -124,6 +125,7 @@ abstract class KeyEvent with Diagnosticable {
     required this.logicalKey,
     this.character,
     required this.timeStamp,
+    this.deviceType = ui.KeyEventDeviceType.keyboard,
     this.synthesized = false,
   });
 
@@ -206,6 +208,13 @@ abstract class KeyEvent with Diagnosticable {
   /// All events share the same timeStamp origin.
   final Duration timeStamp;
 
+  /// The source device type for the key event.
+  ///
+  /// Not all platforms supply an accurate type.
+  ///
+  /// Defaults to [ui.KeyEventDeviceType.keyboard].
+  final ui.KeyEventDeviceType deviceType;
+
   /// Whether this event is synthesized by Flutter to synchronize key states.
   ///
   /// An non-[synthesized] event is converted from a native event, and a native
@@ -253,6 +262,7 @@ class KeyDownEvent extends KeyEvent {
     super.character,
     required super.timeStamp,
     super.synthesized,
+    super.deviceType,
   });
 }
 
@@ -272,6 +282,7 @@ class KeyUpEvent extends KeyEvent {
     required super.logicalKey,
     required super.timeStamp,
     super.synthesized,
+    super.deviceType,
   });
 }
 
@@ -295,6 +306,7 @@ class KeyRepeatEvent extends KeyEvent {
     required super.logicalKey,
     super.character,
     required super.timeStamp,
+    super.deviceType,
   });
 }
 
@@ -457,6 +469,53 @@ class HardwareKeyboard {
   /// of the event.
   Set<KeyboardLockMode> get lockModesEnabled => _lockModes;
 
+  /// Returns true if the given [LogicalKeyboardKey] is pressed, according to
+  /// the [HardwareKeyboard].
+  bool isLogicalKeyPressed(LogicalKeyboardKey key) => _pressedKeys.values.contains(key);
+
+  /// Returns true if the given [PhysicalKeyboardKey] is pressed, according to
+  /// the [HardwareKeyboard].
+  bool isPhysicalKeyPressed(PhysicalKeyboardKey key) => _pressedKeys.containsKey(key);
+
+  /// Returns true if a logical CTRL modifier key is pressed, regardless of
+  /// which side of the keyboard it is on.
+  ///
+  /// Use [isLogicalKeyPressed] if you need to know which control key was
+  /// pressed.
+  bool get isControlPressed {
+    return isLogicalKeyPressed(LogicalKeyboardKey.controlLeft) || isLogicalKeyPressed(LogicalKeyboardKey.controlRight);
+  }
+
+  /// Returns true if a logical SHIFT modifier key is pressed, regardless of
+  /// which side of the keyboard it is on.
+  ///
+  /// Use [isLogicalKeyPressed] if you need to know which shift key was pressed.
+  bool get isShiftPressed {
+    return isLogicalKeyPressed(LogicalKeyboardKey.shiftLeft) || isLogicalKeyPressed(LogicalKeyboardKey.shiftRight);
+  }
+
+  /// Returns true if a logical ALT modifier key is pressed, regardless of which
+  /// side of the keyboard it is on.
+  ///
+  /// The `AltGr` key that appears on some keyboards is considered to be the
+  /// same as [LogicalKeyboardKey.altRight] on some platforms (notably Android).
+  /// On platforms that can distinguish between `altRight` and `altGr`, a press
+  /// of `AltGr` will not return true here, and will need to be tested for
+  /// separately.
+  ///
+  /// Use [isLogicalKeyPressed] if you need to know which alt key was pressed.
+  bool get isAltPressed {
+    return isLogicalKeyPressed(LogicalKeyboardKey.altLeft) || isLogicalKeyPressed(LogicalKeyboardKey.altRight);
+  }
+
+  /// Returns true if a logical META modifier key is pressed, regardless of
+  /// which side of the keyboard it is on.
+  ///
+  /// Use [isLogicalKeyPressed] if you need to know which meta key was pressed.
+  bool get isMetaPressed {
+    return isLogicalKeyPressed(LogicalKeyboardKey.metaLeft) || isLogicalKeyPressed(LogicalKeyboardKey.metaRight);
+  }
+
   void _assertEventIsRegular(KeyEvent event) {
     assert(() {
       const String common = 'If this occurs in real application, please report this '
@@ -532,6 +591,10 @@ class HardwareKeyboard {
   }
 
   /// Query the engine and update _pressedKeys accordingly to the engine answer.
+  //
+  /// Both the framework and the engine maintain a state of the current pressed
+  /// keys. There are edge cases, related to startup and restart, where the framework
+  /// needs to resynchronize its keyboard state.
   Future<void> syncKeyboardState() async {
     final Map<int, int>? keyboardState = await SystemChannels.keyboard.invokeMapMethod<int, int>(
       'getKeyboardState',
@@ -668,20 +731,20 @@ enum KeyDataTransitMode {
   /// to both [KeyMessage.events] and [KeyMessage.rawEvent].
   rawKeyData,
 
-  /// Key event information is delivered as converted key data, followed
-  /// by raw key data.
+  /// Key event information is delivered as converted key data, followed by raw
+  /// key data.
   ///
   /// Key data ([ui.KeyData]) is a standardized event stream converted from
-  /// platform's native key event information, sent through the embedder
-  /// API. Its event model is described in [HardwareKeyboard].
+  /// platform's native key event information, sent through the embedder API.
+  /// Its event model is described in [HardwareKeyboard].
   ///
   /// Raw key data is platform's native key event information sent in JSON
   /// through a method channel. It is interpreted by subclasses of
   /// [RawKeyEventData].
   ///
-  /// If the current transit mode is [rawKeyData], the key data is converted to
-  /// [KeyMessage.events], and the raw key data is converted to
-  /// [KeyMessage.rawEvent].
+  /// If the current transit mode is [keyDataThenRawKeyData], then the
+  /// [KeyEventManager] will use the [ui.KeyData] for [KeyMessage.events], and
+  /// the raw data for [KeyMessage.rawEvent].
   keyDataThenRawKeyData,
 }
 
@@ -788,14 +851,42 @@ typedef KeyMessageHandler = bool Function(KeyMessage message);
 /// and [RawKeyboard] for recording keeping, and then dispatches the [KeyMessage]
 /// to [keyMessageHandler], the global message handler.
 ///
-/// [KeyEventManager] also resolves cross-platform compatibility of keyboard
-/// implementations. Legacy platforms might have not implemented the new key
-/// data API and only send raw key data on each key message. [KeyEventManager]
-/// recognize platform types as [KeyDataTransitMode] and dispatches events in
-/// different ways accordingly.
-///
 /// [KeyEventManager] is typically created, owned, and invoked by
 /// [ServicesBinding].
+///
+/// ## On embedder implementation
+///
+/// Currently, Flutter has two sets of key event APIs running in parallel.
+///
+/// * The legacy "raw key event" route receives messages from the
+///   "flutter/keyevent" message channel ([SystemChannels.keyEvent]) and
+///   dispatches [RawKeyEvent] to [RawKeyboard] and [Focus.onKey] as well as
+///   similar methods.
+/// * The newer "hardware key event" route receives messages from the
+///   "flutter/keydata" message channel (embedder API
+///   `FlutterEngineSendKeyEvent`) and dispatches [KeyEvent] to
+///   [HardwareKeyboard] and some methods such as [Focus.onKeyEvent].
+///
+/// [KeyEventManager] resolves cross-platform compatibility of keyboard
+/// implementations, since legacy platforms might have not implemented the new
+/// key data API and only send raw key data on each key message.
+/// [KeyEventManager] recognizes the platform support by detecting whether a
+/// message comes from platform channel "flutter/keyevent" before one from
+/// "flutter/keydata", or vice versa, at the beginning of the app.
+///
+/// * If a "flutter/keyevent" message is received first, then this platform is
+///   considered a legacy platform. The raw key event is transformed into a
+///   hardware key event at best effort. No messages from "flutter/keydata" are
+///   expected.
+/// * If a "flutter/keydata" message is received first, then this platform is
+///   considered a newer platform. The hardware key events are stored, and
+///   dispatched only when a raw key message is received.
+///
+/// Therefore, to correctly implement a platform that supports
+/// `FlutterEngineSendKeyEvent`, the platform must ensure that
+/// `FlutterEngineSendKeyEvent` is called before sending a message to
+/// "flutter/keyevent" at the beginning of the app, and every physical key event
+/// is ended with a "flutter/keyevent" message.
 class KeyEventManager {
   /// Create an instance.
   ///
@@ -1033,6 +1124,33 @@ class KeyEventManager {
     return <String, dynamic>{ 'handled': handled };
   }
 
+  ui.KeyEventDeviceType _convertDeviceType(RawKeyEvent rawEvent) {
+    final RawKeyEventData data = rawEvent.data;
+    // Device type is only available from Android.
+    if (data is! RawKeyEventDataAndroid) {
+      return ui.KeyEventDeviceType.keyboard;
+    }
+
+    switch (data.eventSource) {
+      // https://developer.android.com/reference/android/view/InputDevice#SOURCE_KEYBOARD
+      case 0x00000101:
+        return ui.KeyEventDeviceType.keyboard;
+      // https://developer.android.com/reference/android/view/InputDevice#SOURCE_DPAD
+      case 0x00000201:
+        return ui.KeyEventDeviceType.directionalPad;
+      // https://developer.android.com/reference/android/view/InputDevice#SOURCE_GAMEPAD
+      case 0x00000401:
+        return ui.KeyEventDeviceType.gamepad;
+      // https://developer.android.com/reference/android/view/InputDevice#SOURCE_JOYSTICK
+      case 0x01000010:
+        return ui.KeyEventDeviceType.joystick;
+      // https://developer.android.com/reference/android/view/InputDevice#SOURCE_HDMI
+      case 0x02000001:
+        return ui.KeyEventDeviceType.hdmi;
+    }
+    return ui.KeyEventDeviceType.keyboard;
+  }
+
   // Convert the raw event to key events, including synthesizing events for
   // modifiers, and store the key events in `_keyEventsSinceLastMessage`.
   //
@@ -1047,6 +1165,7 @@ class KeyEventManager {
     final LogicalKeyboardKey? recordedLogicalMain = _hardwareKeyboard.lookUpLayout(physicalKey);
     final Duration timeStamp = ServicesBinding.instance.currentSystemFrameTimeStamp;
     final String? character = rawEvent.character == '' ? null : rawEvent.character;
+    final ui.KeyEventDeviceType deviceType = _convertDeviceType(rawEvent);
     if (rawEvent is RawKeyDownEvent) {
       if (recordedLogicalMain == null) {
         mainEvent = KeyDownEvent(
@@ -1054,6 +1173,7 @@ class KeyEventManager {
           logicalKey: logicalKey,
           character: character,
           timeStamp: timeStamp,
+          deviceType: deviceType,
         );
         physicalKeysPressed.add(physicalKey);
       } else {
@@ -1063,6 +1183,7 @@ class KeyEventManager {
           logicalKey: recordedLogicalMain,
           character: character,
           timeStamp: timeStamp,
+          deviceType: deviceType,
         );
       }
     } else {
@@ -1074,6 +1195,7 @@ class KeyEventManager {
           logicalKey: recordedLogicalMain,
           physicalKey: physicalKey,
           timeStamp: timeStamp,
+          deviceType: deviceType,
         );
         physicalKeysPressed.remove(physicalKey);
       }
@@ -1088,6 +1210,7 @@ class KeyEventManager {
           logicalKey: logicalKey,
           timeStamp: timeStamp,
           synthesized: true,
+          deviceType: deviceType,
         ));
       } else {
         _keyEventsSinceLastMessage.add(KeyUpEvent(
@@ -1095,6 +1218,7 @@ class KeyEventManager {
           logicalKey: _hardwareKeyboard.lookUpLayout(key)!,
           timeStamp: timeStamp,
           synthesized: true,
+          deviceType: deviceType,
         ));
       }
     }
@@ -1104,6 +1228,7 @@ class KeyEventManager {
         logicalKey: _rawKeyboard.lookUpLayout(key)!,
         timeStamp: timeStamp,
         synthesized: true,
+        deviceType: deviceType,
       ));
     }
     if (mainEvent != null) {
@@ -1141,6 +1266,7 @@ class KeyEventManager {
           timeStamp: timeStamp,
           character: keyData.character,
           synthesized: keyData.synthesized,
+          deviceType: keyData.deviceType,
         );
       case ui.KeyEventType.up:
         assert(keyData.character == null);
@@ -1149,6 +1275,7 @@ class KeyEventManager {
           logicalKey: logicalKey,
           timeStamp: timeStamp,
           synthesized: keyData.synthesized,
+          deviceType: keyData.deviceType,
         );
       case ui.KeyEventType.repeat:
         return KeyRepeatEvent(
@@ -1156,6 +1283,7 @@ class KeyEventManager {
           logicalKey: logicalKey,
           timeStamp: timeStamp,
           character: keyData.character,
+          deviceType: keyData.deviceType,
         );
     }
   }
